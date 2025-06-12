@@ -37,6 +37,17 @@ const jwtConfig = require('../config/jwtconfig');
  *         image:
  *           type: string
  *           description: Book cover image URL
+ *         categories:
+ *           type: array
+ *           items:
+ *             type: string
+ *           description: Array of category IDs
+ *         bookshelf:
+ *           type: string
+ *           description: Bookshelf ID
+ *         quantity:
+ *           type: number
+ *           description: Initial quantity for inventory
  *     BorrowRequest:
  *       type: object
  *       required:
@@ -51,25 +62,123 @@ const jwtConfig = require('../config/jwtconfig');
  *         notes:
  *           type: string
  *           description: Additional notes for the request
+ *     Review:
+ *       type: object
+ *       required:
+ *         - bookId
+ *         - rating
+ *       properties:
+ *         bookId:
+ *           type: string
+ *           description: ID of the book to review
+ *         rating:
+ *           type: number
+ *           minimum: 1
+ *           maximum: 5
+ *           description: Rating from 1 to 5
+ *         comment:
+ *           type: string
+ *           description: Review comment
  */
+
+// ==================== PUBLIC ROUTES ====================
 
 /**
  * @swagger
  * /api/v1/books:
  *   get:
- *     summary: Get all books
+ *     summary: Get all books or search books
  *     tags: [Books]
+ *     parameters:
+ *       - in: query
+ *         name: query
+ *         schema:
+ *           type: string
+ *         description: Search query for title, author, ISBN, or description
+ *       - in: query
+ *         name: category
+ *         schema:
+ *           type: string
+ *         description: Filter by category ID
+ *       - in: query
+ *         name: bookshelf
+ *         schema:
+ *           type: string
+ *         description: Filter by bookshelf ID
+ *       - in: query
+ *         name: author
+ *         schema:
+ *           type: string
+ *         description: Filter by author name
+ *       - in: query
+ *         name: publishYear
+ *         schema:
+ *           type: number
+ *         description: Filter by publication year
+ *       - in: query
+ *         name: available
+ *         schema:
+ *           type: boolean
+ *         description: Filter only available books
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *         description: Page number
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 10
+ *         description: Number of books per page
+ *       - in: query
+ *         name: sortBy
+ *         schema:
+ *           type: string
+ *           default: createdAt
+ *         description: Sort field
+ *       - in: query
+ *         name: sortOrder
+ *         schema:
+ *           type: string
+ *           enum: [asc, desc]
+ *           default: desc
+ *         description: Sort order
  *     responses:
  *       200:
- *         description: List of all books
+ *         description: List of books with pagination
  *         content:
  *           application/json:
  *             schema:
- *               type: array
- *               items:
- *                 $ref: '#/components/schemas/Book'
+ *               type: object
+ *               properties:
+ *                 books:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/Book'
+ *                 pagination:
+ *                   type: object
+ *                   properties:
+ *                     currentPage:
+ *                       type: number
+ *                     totalPages:
+ *                       type: number
+ *                     totalRecords:
+ *                       type: number
+ *                     hasNext:
+ *                       type: boolean
+ *                     hasPrev:
+ *                       type: boolean
  */
-router.get('/', BookController.getAllBooks);
+router.get('/', (req, res) => {
+	// If search parameters are provided, use search function
+	if (Object.keys(req.query).length > 0) {
+		return BookController.searchBooks(req, res);
+	}
+	// Otherwise use getAllBooks
+	return BookController.getAllBooks(req, res);
+});
 
 /**
  * @swagger
@@ -92,6 +201,8 @@ router.get('/', BookController.getAllBooks);
  */
 router.get('/:id', BookController.getBookById);
 
+// ==================== ADMIN ONLY ROUTES ====================
+
 /**
  * @swagger
  * /api/v1/books:
@@ -109,10 +220,123 @@ router.get('/:id', BookController.getBookById);
  *     responses:
  *       201:
  *         description: Book created successfully
+ *       400:
+ *         description: ISBN already exists
  *       403:
  *         description: Admin access required
  */
 router.post('/', jwtConfig.requireAdmin, BookController.createBook);
+
+/**
+ * @swagger
+ * /api/v1/books/{id}:
+ *   put:
+ *     summary: Update book (Admin only)
+ *     tags: [Books]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         schema:
+ *           type: string
+ *         required: true
+ *         description: Book ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/Book'
+ *     responses:
+ *       200:
+ *         description: Book updated successfully
+ *       400:
+ *         description: ISBN already exists for another book
+ *       404:
+ *         description: Book not found
+ *       403:
+ *         description: Admin access required
+ */
+router.put('/:id', jwtConfig.requireAdmin, BookController.updateBook);
+
+/**
+ * @swagger
+ * /api/v1/books/{id}:
+ *   delete:
+ *     summary: Delete book (Admin only)
+ *     tags: [Books]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         schema:
+ *           type: string
+ *         required: true
+ *         description: Book ID
+ *     responses:
+ *       200:
+ *         description: Book deleted successfully
+ *       400:
+ *         description: Cannot delete book with active borrow records
+ *       404:
+ *         description: Book not found
+ *       403:
+ *         description: Admin access required
+ */
+router.delete('/:id', jwtConfig.requireAdmin, BookController.deleteBook);
+
+/**
+ * @swagger
+ * /api/v1/books/{id}/inventory:
+ *   put:
+ *     summary: Update book inventory (Admin only)
+ *     tags: [Books]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         schema:
+ *           type: string
+ *         required: true
+ *         description: Book ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               total:
+ *                 type: number
+ *                 description: Total number of books
+ *               available:
+ *                 type: number
+ *                 description: Available books for borrowing
+ *               borrowed:
+ *                 type: number
+ *                 description: Currently borrowed books
+ *               damaged:
+ *                 type: number
+ *                 description: Damaged books
+ *               lost:
+ *                 type: number
+ *                 description: Lost books
+ *     responses:
+ *       200:
+ *         description: Inventory updated successfully
+ *       400:
+ *         description: Invalid inventory numbers
+ *       404:
+ *         description: Book or inventory not found
+ *       403:
+ *         description: Admin access required
+ */
+router.put('/:id/inventory', jwtConfig.requireAdmin, BookController.updateBookInventory);
+
+// ==================== USER AUTHENTICATED ROUTES ====================
 
 /**
  * @swagger
@@ -183,7 +407,7 @@ router.get('/borrow/requests', jwtConfig.requireAuth, BookController.getUserBorr
  * @swagger
  * /api/v1/books/history/user:
  *   get:
- *     summary: Get user's borrowing and returning history
+ *     summary: Get user's borrowing history
  *     tags: [Books]
  *     security:
  *       - bearerAuth: []
@@ -212,6 +436,8 @@ router.get('/borrow/requests', jwtConfig.requireAuth, BookController.getUserBorr
  */
 router.get('/history/user', jwtConfig.requireAuth, BookController.getBorrowHistory);
 
+// ==================== REVIEW ROUTES ====================
+
 /**
  * @swagger
  * /api/v1/books/review:
@@ -225,27 +451,14 @@ router.get('/history/user', jwtConfig.requireAuth, BookController.getBorrowHisto
  *       content:
  *         application/json:
  *           schema:
- *             type: object
- *             required:
- *               - bookId
- *               - rating
- *             properties:
- *               bookId:
- *                 type: string
- *                 description: ID of the book to review
- *               rating:
- *                 type: number
- *                 minimum: 1
- *                 maximum: 5
- *                 description: Rating from 1 to 5
- *               comment:
- *                 type: string
- *                 description: Review comment
+ *             $ref: '#/components/schemas/Review'
  *     responses:
  *       201:
  *         description: Review created successfully
  *       400:
  *         description: You can only review books you have borrowed and returned
+ *       404:
+ *         description: Book not found
  */
 router.post('/review', jwtConfig.requireAuth, BookController.createReview);
 
@@ -275,8 +488,10 @@ router.post('/review', jwtConfig.requireAuth, BookController.createReview);
  *                 type: number
  *                 minimum: 1
  *                 maximum: 5
+ *                 description: Rating from 1 to 5
  *               comment:
  *                 type: string
+ *                 description: Review comment
  *     responses:
  *       200:
  *         description: Review updated successfully

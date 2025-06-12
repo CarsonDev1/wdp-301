@@ -30,12 +30,26 @@ app.use(urlencoded({ extended: true }));
 // Routes
 app.use('/api/v1/auth', require('./routes/authRoute'));
 app.use('/api/v1/books', require('./routes/BookRoute'));
+app.use('/api/v1/categories', require('./routes/CategoryRoute'));
+app.use('/api/v1/bookshelves', require('./routes/BookshelfRoute'));
+app.use('/api/v1/admin/borrow-requests', require('./routes/BorrowManagementRoute'));
+app.use('/api/v1/fines', require('./routes/FineRoute'));
 
 // Health check route
 app.get('/api/v1/health', (req, res) => {
 	res.status(200).json({
 		message: 'Library Management API is running',
 		timestamp: new Date().toISOString(),
+		version: '2.0.0',
+		features: [
+			'Book Management',
+			'Category Management',
+			'Bookshelf Management',
+			'Borrow Request Management',
+			'Fine Management',
+			'User Authentication',
+			'Review System',
+		],
 	});
 });
 
@@ -61,4 +75,12 @@ const PORT = process.env.PORT || 9999;
 app.listen(PORT, () => {
 	console.log(`Backend is running at http://localhost:${PORT}`);
 	console.log(`API Documentation available at http://localhost:${PORT}/api-docs`);
+	console.log('\n📚 Available API Endpoints:');
+	console.log('├── Authentication: /api/v1/auth');
+	console.log('├── Books: /api/v1/books');
+	console.log('├── Categories: /api/v1/categories');
+	console.log('├── Bookshelves: /api/v1/bookshelves');
+	console.log('├── Borrow Management: /api/v1/admin/borrow-requests');
+	console.log('├── Fines: /api/v1/fines');
+	console.log('└── Health Check: /api/v1/health');
 });

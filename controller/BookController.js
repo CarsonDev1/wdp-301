@@ -315,3 +315,247 @@ exports.deleteReview = async (req, res) => {
 		res.status(500).json({ message: error.message });
 	}
 };
+
+exports.updateBook = async (req, res) => {
+	try {
+		const bookId = req.params.id;
+		const {
+			title,
+			isbn,
+			author,
+			publisher,
+			publishYear,
+			description,
+			price,
+			image,
+			categories,
+			bookshelf,
+			quantity,
+		} = req.body;
+
+		// Check if another book with the same ISBN exists
+		const existingBook = await Book.findOne({
+			isbn,
+			_id: { $ne: bookId },
+		});
+		if (existingBook) {
+			return res.status(400).json({ message: 'ISBN already exists for another book' });
+		}
+
+		const book = await Book.findByIdAndUpdate(
+			bookId,
+			{
+				title,
+				isbn,
+				author,
+				publisher,
+				publishYear,
+				description,
+				price,
+				image,
+				categories,
+				bookshelf,
+				updatedAt: Date.now(),
+			},
+			{ new: true }
+		)
+			.populate('categories', 'name')
+			.populate('bookshelf', 'code name location');
+
+		if (!book) {
+			return res.status(404).json({ message: 'Book not found' });
+		}
+
+		// Update inventory if quantity is provided
+		if (quantity !== undefined) {
+			const inventory = await Inventory.findOne({ book: bookId });
+			if (inventory) {
+				const difference = quantity - inventory.total;
+				inventory.total = quantity;
+				inventory.available = inventory.available + difference;
+				await inventory.save();
+			}
+		}
+
+		res.status(200).json({
+			message: 'Book updated successfully',
+			book,
+		});
+	} catch (error) {
+		res.status(500).json({ message: error.message });
+	}
+};
+
+exports.deleteBook = async (req, res) => {
+	try {
+		const bookId = req.params.id;
+
+		// Check if book has any borrow records
+		const borrowRecords = await BorrowRecord.countDocuments({
+			bookId,
+			status: { $in: ['pending', 'borrowed'] },
+		});
+
+		if (borrowRecords > 0) {
+			return res.status(400).json({
+				message: `Cannot delete book. It has ${borrowRecords} active borrow record(s)`,
+			});
+		}
+
+		// Delete inventory first
+		await Inventory.findOneAndDelete({ book: bookId });
+
+		// Delete the book
+		const book = await Book.findByIdAndDelete(bookId);
+		if (!book) {
+			return res.status(404).json({ message: 'Book not found' });
+		}
+
+		res.status(200).json({
+			message: 'Book deleted successfully',
+		});
+	} catch (error) {
+		res.status(500).json({ message: error.message });
+	}
+};
+
+exports.updateBookInventory = async (req, res) => {
+	try {
+		const bookId = req.params.id;
+		const { total, available, borrowed, damaged, lost } = req.body;
+
+		const book = await Book.findById(bookId);
+		if (!book) {
+			return res.status(404).json({ message: 'Book not found' });
+		}
+
+		const inventory = await Inventory.findOne({ book: bookId });
+		if (!inventory) {
+			return res.status(404).json({ message: 'Inventory not found for this book' });
+		}
+
+		// Validate the numbers make sense
+		const newTotal = total !== undefined ? total : inventory.total;
+		const newAvailable = available !== undefined ? available : inventory.available;
+		const newBorrowed = borrowed !== undefined ? borrowed : inventory.borrowed;
+		const newDamaged = damaged !== undefined ? damaged : inventory.damaged;
+		const newLost = lost !== undefined ? lost : inventory.lost;
+
+		if (newAvailable + newBorrowed + newDamaged + newLost !== newTotal) {
+			return res.status(400).json({
+				message: 'Invalid inventory numbers. Total must equal available + borrowed + damaged + lost',
+			});
+		}
+
+		// Update inventory
+		Object.assign(inventory, {
+			total: newTotal,
+			available: newAvailable,
+			borrowed: newBorrowed,
+			damaged: newDamaged,
+			lost: newLost,
+		});
+
+		await inventory.save();
+
+		res.status(200).json({
+			message: 'Book inventory updated successfully',
+			inventory,
+		});
+	} catch (error) {
+		res.status(500).json({ message: error.message });
+	}
+};
+
+exports.searchBooks = async (req, res) => {
+	try {
+		const {
+			query,
+			category,
+			bookshelf,
+			author,
+			publishYear,
+			available,
+			page = 1,
+			limit = 10,
+			sortBy = 'createdAt',
+			sortOrder = 'desc',
+		} = req.query;
+
+		// Build search query
+		const searchQuery = {};
+
+		if (query) {
+			searchQuery.$or = [
+				{ title: { $regex: query, $options: 'i' } },
+				{ author: { $regex: query, $options: 'i' } },
+				{ isbn: { $regex: query, $options: 'i' } },
+				{ description: { $regex: query, $options: 'i' } },
+			];
+		}
+
+		if (category) {
+			searchQuery.categories = category;
+		}
+
+		if (bookshelf) {
+			searchQuery.bookshelf = bookshelf;
+		}
+
+		if (author) {
+			searchQuery.author = { $regex: author, $options: 'i' };
+		}
+
+		if (publishYear) {
+			searchQuery.publishYear = publishYear;
+		}
+
+		// Get books
+		let booksQuery = Book.find(searchQuery)
+			.populate('categories', 'name')
+			.populate('bookshelf', 'code name location')
+			.sort({ [sortBy]: sortOrder === 'desc' ? -1 : 1 })
+			.limit(limit * 1)
+			.skip((page - 1) * limit);
+
+		let books = await booksQuery;
+
+		// Filter by availability if requested
+		if (available === 'true') {
+			const bookIds = books.map((book) => book._id);
+			const availableInventory = await Inventory.find({
+				book: { $in: bookIds },
+				available: { $gt: 0 },
+			}).select('book');
+
+			const availableBookIds = availableInventory.map((inv) => inv.book.toString());
+			books = books.filter((book) => availableBookIds.includes(book._id.toString()));
+		}
+
+		// Get inventory information for each book
+		const booksWithInventory = await Promise.all(
+			books.map(async (book) => {
+				const inventory = await Inventory.findOne({ book: book._id });
+				return {
+					...book.toObject(),
+					inventory: inventory || { available: 0, total: 0, borrowed: 0, damaged: 0, lost: 0 },
+				};
+			})
+		);
+
+		const total = await Book.countDocuments(searchQuery);
+
+		res.status(200).json({
+			books: booksWithInventory,
+			pagination: {
+				currentPage: page,
+				totalPages: Math.ceil(total / limit),
+				totalRecords: total,
+				hasNext: page * limit < total,
+				hasPrev: page > 1,
+			},
+		});
+	} catch (error) {
+		res.status(500).json({ message: error.message });
+	}
+};
